@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI图像消除 - 区域标注</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; padding: 20px;
+        }
+        .container {
+            max-width: 1000px; margin: 0 auto;
+            background: white; border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white; padding: 24px 32px;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 8px; }
+        .header p { opacity: 0.8; font-size: 14px; }
+        .status-bar {
+            background: #f8f9fa; padding: 16px 32px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .status-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: #28a745; animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .iteration-badge {
+            background: #007bff; color: white;
+            padding: 4px 12px; border-radius: 20px;
+            font-size: 12px;
+        }
+        .main-content { padding: 32px; }
+        .instructions {
+            background: #fff3cd; border: 1px solid #ffc107;
+            border-radius: 8px; padding: 16px; margin-bottom: 24px;
+        }
+        .instructions h4 { color: #856404; margin-bottom: 8px; font-size: 14px; }
+        .instructions ul { margin-left: 20px; font-size: 13px; color: #856404; }
+        .image-section { margin-bottom: 24px; }
+        .image-section h3 { font-size: 16px; color: #333; margin-bottom: 12px; }
+        .image-wrapper {
+            position: relative;
+            border: 2px solid #e9ecef; border-radius: 8px;
+            overflow: hidden; cursor: crosshair;
+            display: inline-block; background: #f8f9fa;
+        }
+        .image-wrapper img {
+            display: block; max-width: 100%; max-height: 500px;
+            user-select: none; -webkit-user-drag: none;
+        }
+        .selection-box {
+            position: absolute;
+            border: 2px solid #dc3545;
+            background: rgba(220, 53, 69, 0.3);
+            pointer-events: none;
+            z-index: 10;
+        }
+        .selection-box.temp {
+            border: 2px dashed #dc3545;
+            background: rgba(220, 53, 69, 0.2);
+        }
+        .selection-info {
+            margin-top: 16px; padding: 16px;
+            background: #f8f9fa; border-radius: 8px;
+        }
+        .selection-info.active {
+            background: #d4edda; border: 1px solid #28a745;
+        }
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 12px;
+            margin-top: 24px; padding-top: 24px;
+            border-top: 1px solid #e9ecef;
+        }
+        .btn {
+            padding: 12px 24px; border: none; border-radius: 8px;
+            font-size: 15px; font-weight: 500; cursor: pointer;
+            transition: all 0.2s; display: inline-flex;
+            align-items: center; gap: 8px;
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #dc3545; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #c82333; transform: translateY(-1px); }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover:not(:disabled) { background: #218838; transform: translateY(-1px); }
+        .btn-outline { background: white; color: #6c757d; border: 1px solid #6c757d; }
+        .btn-outline:hover:not(:disabled) { background: #f8f9fa; }
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7); display: flex;
+            align-items: center; justify-content: center; z-index: 1000;
+        }
+        .loading-content {
+            background: white; padding: 40px 60px;
+            border-radius: 16px; text-align: center;
+        }
+        .loading-spinner {
+            width: 50px; height: 50px; border: 4px solid #e9ecef;
+            border-top-color: #007bff; border-radius: 50%;
+            animation: spin 1s linear infinite; margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .hidden { display: none !important; }
+        .api-config {
+            background: #e7f3ff; border: 1px solid #b8daff;
+            border-radius: 8px; padding: 16px; margin-bottom: 24px;
+        }
+        .api-config h4 { color: #004085; margin-bottom: 12px; font-size: 14px; }
+        .api-config input {
+            width: 100%; padding: 8px 12px; margin-bottom: 8px;
+            border: 1px solid #ced4da; border-radius: 4px;
+        }
+        .api-config label {
+            display: block; margin-bottom: 4px;
+            font-size: 13px; color: #004085;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🖼️ AI图像消除工具</h1>
+            <p>智能抠图后处理 - 框选需要消除的区域</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-dot"></div>
+            <span>处理轮次: <span id="iterationCount">1</span></span>
+            <span class="iteration-badge" id="statusBadge">等待操作</span>
+        </div>
+
+        <div class="main-content">
+            <div class="instructions">
+                <h4>📋 操作说明</h4>
+                <ul>
+                    <li>在图片上<strong>按住鼠标拖动</strong>框选要消除的区域</li>
+                    <li>可以<strong>连续框选多个区域</strong></li>
+                    <li>框选完成后点击"<strong>确认消除选中区域</strong>"调用API处理</li>
+                    <li>满意则点击"<strong>满意，输出结果</strong>"完成</li>
+                </ul>
+            </div>
+
+            <div class="api-config" id="apiConfigSection">
+                <h4>⚙️ API配置</h4>
+                <label>API Name (认证凭证)</label>
+                <input type="text" id="apiNameInput" placeholder="请输入您的API Name">
+                <label>API Secret</label>
+                <input type="text" id="apiSecretInput" placeholder="请输入您的API Secret">
+                <button class="btn btn-outline" onclick="saveApiConfig()" style="margin-top:8px;">
+                    💾 保存配置
+                </button>
+            </div>
+
+            <div class="image-section">
+                <h3>📷 当前处理结果</h3>
+                <div class="image-wrapper" id="imageWrapper">
+                    <img id="targetImage" src="" alt="待处理图片">
+                </div>
+
+                <div class="selection-info" id="selectionInfo">
+                    <strong>选区信息:</strong> <span id="selectionText">未选择任何区域</span>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button class="btn btn-primary" id="submitBtn" onclick="submitEliminate()" disabled>
+                    ✂️ 确认消除选中区域
+                </button>
+                <button class="btn btn-success" id="satisfiedBtn" onclick="submitSatisfied()">
+                    ✅ 满意，输出结果
+                </button>
+                <button class="btn btn-outline" onclick="clearSelections()">
+                    🗑️ 清除所有选区
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading-overlay hidden" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <p id="loadingText">处理中...</p>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        //                      配置参数
+        // ============================================================
+        const urlParams = new URLSearchParams(window.location.search);
+
+        const CONFIG = {
+            imageUrl: urlParams.get('image_url') || '',
+            webhookUrl: urlParams.get('webhook_url') || '',
+            sessionId: urlParams.get('session_id') || '',
+            iteration: parseInt(urlParams.get('iteration') || '1'),
+            apiUrl: 'https://cn-api.aidc-ai.com',
+            SDK_VERSION: 'iop-sdk-python-20220609'
+        };
+
+        // API认证配置
+        let API_CREDENTIALS = {
+            name: localStorage.getItem('aidc_api_name') || '',
+            secret: localStorage.getItem('aidc_api_secret') || ''
+        };
+
+        // ============================================================
+        //                      状态管理
+        // ============================================================
+        let selections = [];
+        let isDrawing = false;
+        let tempBox = null;
+        let startX = 0, startY = 0;
+        let imageLoaded = false;
+
+        // ============================================================
+        //                      初始化
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', function() {
+            if (API_CREDENTIALS.name) {
+                document.getElementById('apiNameInput').value = API_CREDENTIALS.name;
+            }
+            if (API_CREDENTIALS.secret) {
+                document.getElementById('apiSecretInput').value = API_CREDENTIALS.secret;
+            }
+
+            if (CONFIG.imageUrl) {
+                document.getElementById('targetImage').src = CONFIG.imageUrl;
+            } else {
+                showError('缺少图片URL参数');
+            }
+
+            document.getElementById('iterationCount').textContent = CONFIG.iteration;
+        });
+
+        const img = document.getElementById('targetImage');
+        const wrapper = document.getElementById('imageWrapper');
+
+        img.addEventListener('load', function() {
+            imageLoaded = true;
+            wrapper.addEventListener('mousedown', onMouseDown);
+            wrapper.addEventListener('mousemove', onMouseMove);
+            wrapper.addEventListener('mouseup', onMouseUp);
+            wrapper.addEventListener('mouseleave', onMouseUp);
+            updateStatus('等待框选');
+        });
+
+        img.addEventListener('error', function() {
+            showError('图片加载失败，请检查URL是否正确');
+        });
+
+        // ============================================================
+        //                      框选绘制逻辑
+        // ============================================================
+        function onMouseDown(e) {
+            if (!imageLoaded) return;
+            if (e.target !== img) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const rect = img.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            isDrawing = true;
+
+            tempBox = document.createElement('div');
+            tempBox.className = 'selection-box temp';
+            tempBox.style.left = startX + 'px';
+            tempBox.style.top = startY + 'px';
+            tempBox.style.width = '0px';
+            tempBox.style.height = '0px';
+            wrapper.appendChild(tempBox);
+
+            updateStatus('正在框选...');
+        }
+
+        function onMouseMove(e) {
+            if (!isDrawing || !tempBox) return;
+
+            const rect = img.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+
+            const left = Math.min(currentX, startX);
+            const top = Math.min(currentY, startY);
+            const width = Math.abs(currentX - startX);
+            const height = Math.abs(currentY - startY);
+
+            tempBox.style.left = left + 'px';
+            tempBox.style.top = top + 'px';
+            tempBox.style.width = width + 'px';
+            tempBox.style.height = height + 'px';
+        }
+
+        function onMouseUp(e) {
+            if (!isDrawing || !tempBox) return;
+
+            isDrawing = false;
+
+            const rect = img.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const endY = e.clientY - rect.top;
+
+            const scaleX = img.naturalWidth / img.width;
+            const scaleY = img.naturalHeight / img.height;
+
+            const region = {
+                x: Math.round(Math.min(startX, endX) * scaleX),
+                y: Math.round(Math.min(startY, endY) * scaleY),
+                width: Math.round(Math.abs(endX - startX) * scaleX),
+                height: Math.round(Math.abs(endY - startY) * scaleY)
+            };
+
+            if (region.width < 10 || region.height < 10) {
+                tempBox.remove();
+                tempBox = null;
+                updateStatus('等待框选');
+                return;
+            }
+
+            tempBox.classList.remove('temp');
+            tempBox.classList.add('final');
+            selections.push(region);
+            tempBox = null;
+
+            updateUI();
+            updateStatus(`已选择 ${selections.length} 个区域`);
+        }
+
+        // ============================================================
+        //                      UI更新函数
+        // ============================================================
+        function updateUI() {
+            const textEl = document.getElementById('selectionText');
+            const infoEl = document.getElementById('selectionInfo');
+            const submitBtn = document.getElementById('submitBtn');
+
+            if (selections.length === 0) {
+                textEl.textContent = '未选择任何区域';
+                infoEl.classList.remove('active');
+                submitBtn.disabled = true;
+            } else {
+                const details = selections.map((s, i) =>
+                    `#${i+1}: (${s.x}, ${s.y}) ${s.width}×${s.height}px`
+                ).join(' | ');
+                textEl.textContent = details;
+                infoEl.classList.add('active');
+                submitBtn.disabled = false;
+            }
+        }
+
+        function updateStatus(text) {
+            document.getElementById('statusBadge').textContent = text;
+        }
+
+        function showLoading(text) {
+            document.getElementById('loadingText').textContent = text;
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.add('hidden');
+        }
+
+        function showError(message) {
+            alert('错误: ' + message);
+        }
+
+        function clearSelections() {
+            document.querySelectorAll('.selection-box').forEach(el => el.remove());
+            selections = [];
+            tempBox = null;
+            updateUI();
+            updateStatus('等待框选');
+        }
+
+        // ============================================================
+        //                      API配置保存
+        // ============================================================
+        function saveApiConfig() {
+            const name = document.getElementById('apiNameInput').value.trim();
+            const secret = document.getElementById('apiSecretInput').value.trim();
+
+            if (!name || !secret) {
+                alert('请填写完整的API Name和Secret');
+                return;
+            }
+
+            API_CREDENTIALS.name = name;
+            API_CREDENTIALS.secret = secret;
+
+            localStorage.setItem('aidc_api_name', name);
+            localStorage.setItem('aidc_api_secret', secret);
+
+            alert('API配置已保存！');
+        }
+
+        // ============================================================
+        //                      API签名生成（严格按照Python SDK）
+        // ============================================================
+        async function generateSignature(secret, apiPath, parameters) {
+            // 1. 按键名排序（字母顺序）
+            const sortedKeys = Object.keys(parameters).sort();
+
+            // 2. 构建参数字符串：key1value1key2value2...
+            let paramStr = '';
+            for (const key of sortedKeys) {
+                paramStr += key + String(parameters[key]);
+            }
+
+            // 3. 如果路径以"/"开头，拼接路径
+            let signStr = '';
+            if (apiPath.startsWith('/')) {
+                signStr = apiPath + paramStr;
+            } else {
+                signStr = paramStr;
+            }
+
+            console.log('签名字符串:', signStr);
+
+            // 4. HMAC-SHA256签名
+            const signature = await hmacSha256(secret, signStr);
+            return signature.toUpperCase();
+        }
+
+        // HMAC-SHA256 实现
+        async function hmacSha256(key, message) {
+            const encoder = new TextEncoder();
+            const keyData = encoder.encode(key);
+            const messageData = encoder.encode(message);
+
+            try {
+                const cryptoKey = await window.crypto.subtle.importKey(
+                    'raw',
+                    keyData,
+                    { name: 'HMAC', hash: 'SHA-256' },
+                    false,
+                    ['sign']
+                );
+                const signature = await window.crypto.subtle.sign('HMAC', cryptoKey, messageData);
+                return Array.from(new Uint8Array(signature))
+                    .map(b => b.toString(16).padStart(2, '0')).join('');
+            } catch (e) {
+                console.warn('Web Crypto API不可用:', e);
+                throw new Error('需要HTTPS环境才能使用API签名功能');
+            }
+        }
+
+        // ============================================================
+        //                      构建API请求（按照Python SDK）
+        // ============================================================
+        async function buildRequest(apiUrl, apiName, apiSecret, apiPath, apiParams, useTrial = true) {
+            // 1. 时间戳
+            const timestamp = Math.floor(Date.now() / 1000) + '000';
+
+            // 2. 系统参数（按照Python SDK）
+            const sysParameters = {
+                'app_key': apiName,
+                'sign_method': 'sha256',
+                'timestamp': timestamp,
+                'partner_id': CONFIG.SDK_VERSION,
+                'method': apiPath,
+                'simplify': 'false',
+                'format': 'json'
+            };
+
+            // 3. 合并所有参数
+            const allParameters = { ...sysParameters, ...apiParams };
+
+            // 4. 计算签名
+            const sign = await generateSignature(apiSecret, apiPath, allParameters);
+            allParameters['sign'] = sign;
+
+            console.log('所有参数:', allParameters);
+
+            // 5. 构建请求URL
+            let requestUrl = apiUrl;
+            if (apiUrl.endsWith('/')) {
+                requestUrl += 'rest';
+            } else {
+                requestUrl += '/rest';
+            }
+
+            // 6. 请求头
+            const headers = {};
+            if (useTrial) {
+                headers['x-iop-trial'] = 'true';
+            }
+
+            console.log('请求URL:', requestUrl);
+            console.log('请求头:', headers);
+
+            // 7. 发送请求（使用form-urlencoded格式）
+            const formData = new URLSearchParams();
+            for (const [key, value] of Object.entries(allParameters)) {
+                formData.append(key, value);
+            }
+
+            const response = await fetch(requestUrl, {
+                method: 'POST',
+                headers: headers,
+                body: formData.toString()
+            });
+
+            return await response.json();
+        }
+
+        // ============================================================
+        //                      获取图片Base64
+        // ============================================================
+        async function getImageBase64(url) {
+            const response = await fetch(url);
+            const blob = await response.blob();
+
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        // ============================================================
+        //                      调用消除API
+        // ============================================================
+        async function submitEliminate() {
+            if (selections.length === 0) {
+                alert('请先框选要消除的区域');
+                return;
+            }
+
+            if (!API_CREDENTIALS.name || !API_CREDENTIALS.secret) {
+                alert('请先配置API Name和Secret');
+                return;
+            }
+
+            showLoading('正在调用API处理图片...');
+
+            try {
+                // 1. 获取图片Base64
+                const imageBase64 = await getImageBase64(CONFIG.imageUrl);
+
+                // 2. API参数
+                const apiParams = {
+                    'image_base64': imageBase64,
+                    'object_remove_elements': JSON.stringify([1, 2, 3]),
+                    'non_object_remove_elements': JSON.stringify([1, 2, 3])
+                };
+
+                // 3. 调用API
+                const result = await buildRequest(
+                    CONFIG.apiUrl,
+                    API_CREDENTIALS.name,
+                    API_CREDENTIALS.secret,
+                    '/ai/image/removal',
+                    apiParams,
+                    true
+                );
+
+                console.log('API响应:', result);
+
+                if (result.code === '0' && result.success) {
+                    const newImageUrl = result.data.imageUrl;
+                    hideLoading();
+                    showResult(newImageUrl, result.data);
+                } else {
+                    hideLoading();
+                    const errorMsg = result.message || result.resMessage || 'API调用失败';
+                    alert('处理失败: ' + errorMsg + '\n\n错误码: ' + result.code);
+                    console.error('API响应:', result);
+                }
+
+            } catch (error) {
+                hideLoading();
+                alert('请求失败: ' + error.message);
+                console.error('请求异常:', error);
+            }
+        }
+
+        // ============================================================
+        //                      显示处理结果
+        // ============================================================
+        function showResult(newImageUrl, data) {
+            CONFIG.imageUrl = newImageUrl;
+            CONFIG.iteration += 1;
+
+            clearSelections();
+
+            img.src = newImageUrl;
+            document.getElementById('iterationCount').textContent = CONFIG.iteration;
+
+            alert(`处理成功！\n\n图片尺寸: ${data.width}×${data.height}\n\n请查看新图片，如不满意可继续框选消除。`);
+
+            updateStatus('等待框选');
+        }
+
+        // ============================================================
+        //                      提交满意结果
+        // ============================================================
+        async function submitSatisfied() {
+            showLoading('正在确认结果...');
+
+            try {
+                if (CONFIG.webhookUrl) {
+                    await fetch(CONFIG.webhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: CONFIG.sessionId,
+                            action: 'satisfied',
+                            final_image_url: CONFIG.imageUrl,
+                            iteration: CONFIG.iteration
+                        })
+                    });
+                }
+
+                document.body.innerHTML = `
+                    <div style="display:flex;align-items:center;justify-content:center;height:100vh;background:linear-gradient(135deg,#667eea,#764ba2);">
+                        <div style="background:white;padding:60px;border-radius:16px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+                            <div style="font-size:64px;margin-bottom:20px;">✅</div>
+                            <h2 style="margin-bottom:12px;color:#333;">处理完成</h2>
+                            <p style="color:#666;margin-bottom:20px;">共处理 ${CONFIG.iteration} 轮</p>
+                            <div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:20px;">
+                                <p style="font-size:13px;color:#666;">最终图片URL:</p>
+                                <p style="font-size:12px;color:#007bff;word-break:break-all;">${CONFIG.imageUrl}</p>
+                            </div>
+                            <p style="color:#666;font-size:14px;">请返回 Dify 查看最终结果</p>
+                        </div>
+                    </div>`;
+            } catch (error) {
+                hideLoading();
+                alert('确认失败: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
