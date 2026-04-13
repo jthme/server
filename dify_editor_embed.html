@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIDGE 编辑器 — Dify集成</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: #1a1a2e;
+            color: white;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 18px; }
+        .header .info { font-size: 13px; opacity: 0.8; }
+        .status-bar {
+            background: #fff;
+            padding: 8px 24px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #999;
+        }
+        .status-dot.ready { background: #28a745; }
+        .status-dot.loading { background: #ffc107; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .iframe-container {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        .iframe-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 100;
+        }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 4px solid #e0e0e0;
+            border-top-color: #007bff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-overlay p { margin-top: 12px; color: #666; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>AIDGE 智能消除编辑器</h1>
+        <span class="info" id="headerInfo">加载中...</span>
+    </div>
+    <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">初始化中</span>
+    </div>
+    <div class="iframe-container">
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+            <p>正在加载编辑器...</p>
+        </div>
+        <iframe id="editorIframe" class="aidc-open-frame" src="" frameborder="0"></iframe>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- ========== AIDGE 通信SDK ========== -->
+    <script>
+        // 必须在SDK脚本之前声明
+        window.INTL_OP_FRAME_SDK_CONFIG = {
+            apiMap: {
+                // 将SDK默认的签名请求路径映射到实际的服务端地址
+                '/open/api/signature': '__SIGNATURE_ENDPOINT__'
+            },
+            // 请求数据格式
+            dataType: 'json'
+        };
+    </script>
+    <script src="https://g.alicdn.com/code/npm/@ali/intl-op-frame-sdk/0.1.10/main.min.js"></script>
+
+    <script>
+        // ============================================================
+        //                      配置参数
+        // ============================================================
+        const urlParams = new URLSearchParams(window.location.search);
+
+        const CONFIG = {
+            // Dify工作流回调
+            difyWebhookUrl: urlParams.get('dify_webhook_url') || '',
+            sessionId: urlParams.get('session_id') || '',
+            workflowRunId: urlParams.get('workflow_run_id') || '',
+
+            // 编辑器配置
+            editorBaseUrl: 'https://image-editor.aidc-ai.com/editor/index.html/?version=v2#/',
+            editorTool: 'elimination',
+            apiHost: 'aibcn',       // 'aibcn'=中文站, 'aib'=英文站
+            trial: urlParams.get('trial') !== 'false',   // 默认试用
+            lang: urlParams.get('lang') || 'zh-cn',
+
+            // 能力输入参数（消除编辑器）
+            imageUrl: urlParams.get('image_url') || '',
+            imageWidth: parseInt(urlParams.get('image_width') || '800'),
+            imageHeight: parseInt(urlParams.get('image_height') || '800'),
+
+            // 加签服务地址（由Nginx代理或直连）
+            signatureEndpoint: urlParams.get('signature_endpoint') || '/open/api/signature'
+        };
+
+        // 更新SDK配置中的签名端点
+        window.INTL_OP_FRAME_SDK_CONFIG.apiMap['/open/api/signature'] = CONFIG.signatureEndpoint;
+
+        // 结果存储
+        let editorResults = [];
+        let isEditorReady = false;
+
+        // ============================================================
+        //                      工具函数
+        // ============================================================
+        function setStatus(text, state) {
+            document.getElementById('statusText').textContent = text;
+            const dot = document.getElementById('statusDot');
+            dot.className = 'status-dot' + (state ? ` ${state}` : '');
+        }
+
+        function showToast(msg, type) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.className = 'toast show ' + (type || '');
+            setTimeout(() => { el.className = 'toast'; }, 3000);
+        }
+
+        // ============================================================
+        //                      构建编辑器URL
+        // ============================================================
+        function buildEditorUrl() {
+            const payload = {
+                apiHost: CONFIG.apiHost,
+                trial: CONFIG.trial,
+                width: CONFIG.imageWidth,
+                height: CONFIG.imageHeight,
+                imageUrl: CONFIG.imageUrl,
+                lang: CONFIG.lang
+            };
+            const payloadString = encodeURIComponent(JSON.stringify(payload));
+            return `${CONFIG.editorBaseUrl}${CONFIG.editorTool}?payload=${payloadString}`;
+        }
+
+        // ============================================================
+        //                      初始化编辑器
+        // ============================================================
+        function initEditor() {
+            const iframe = document.getElementById('editorIframe');
+            const editorUrl = buildEditorUrl();
+            iframe.src = editorUrl;
+
+            document.getElementById('headerInfo').textContent =
+                `Session: ${CONFIG.sessionId.substring(0, 8)}...`;
+
+            setStatus('加载编辑器', 'loading');
+        }
+
+        // ============================================================
+        //                      监听编辑器消息
+        // ============================================================
+        window.addEventListener("message", function (ev) {
+            const { data, action, biz, errMessage, code } = ev.data;
+            console.log('[Editor Message]', ev.data);
+
+            switch (action) {
+                case 'pageReady':
+                    console.log('编辑器页面初始化完成');
+                    setStatus('编辑器就绪', 'ready');
+                    isEditorReady = true;
+                    document.getElementById('loadingOverlay').style.display = 'none';
+                    showToast('编辑器加载完成，可以开始编辑', 'success');
+                    break;
+
+                case 'generate':
+                    // 生产拦截（如果开启了 charge=true）
+                    console.log('用户触发生成，图片数量:', data?.imageNum);
+                    // 此处可以加入余额校验等逻辑
+                    // 允许继续
+                    iframe.contentWindow.postMessage({
+                        biz: biz || 'nhci-elimination',
+                        action: 'respond',
+                        success: true
+                    }, '*');
+                    break;
+
+                case 'taskSuccess':
+                    // 生成任务完成
+                    console.log('业务:', biz, '生成任务完成:', data);
+                    showToast('图片生成完成', 'success');
+                    break;
+
+                case 'submitAll':
+                    // 用户点击"保存"或"下载" — 最终结果
+                    console.log('最终结果:', data);
+                    editorResults = data;
+                    handleEditorSubmit(data);
+                    break;
+
+                case 'error':
+                    console.error('编辑器错误:', code, errMessage);
+                    showToast('编辑器出错: ' + (errMessage || code), 'error');
+                    break;
+
+                default:
+                    console.log('未处理的消息类型:', action);
+            }
+        });
+
+        // ============================================================
+        //                      处理编辑器提交结果
+        // ============================================================
+        async function handleEditorSubmit(results) {
+            if (!results || results.length === 0) {
+                showToast('未获取到结果数据', 'error');
+                return;
+            }
+
+            setStatus('提交结果...', 'loading');
+
+            try {
+                // 提取当前选中的结果（isCurrentIndex=true）
+                const currentResult = results.find(r => r.isCurrentIndex) || results[0];
+
+                const callbackPayload = {
+                    session_id: CONFIG.sessionId,
+                    workflow_run_id: CONFIG.workflowRunId,
+                    action: 'editor_submit',
+                    // 画布结果图URL
+                    final_image_url: currentResult.url || '',
+                    // 原始处理图URL
+                    original_image_url: currentResult.originalUrl || '',
+                    // JSON协议（用于二次编辑）
+                    schema: currentResult.schema || '',
+                    // 使用的工具
+                    tool: currentResult.tool || 'elimination',
+                    // 结果ID
+                    result_id: currentResult.id || '',
+                    // 完整结果数组
+                    all_results: results
+                };
+
+                // 回调Dify工作流
+                if (CONFIG.difyWebhookUrl) {
+                    const response = await fetch(CONFIG.difyWebhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(callbackPayload)
+                    });
+
+                    if (response.ok) {
+                        showToast('结果已提交到Dify工作流', 'success');
+                        showSuccessPage(callbackPayload);
+                    } else {
+                        showToast('回调Dify失败', 'error');
+                    }
+                } else {
+                    // 没有webhook，直接显示结果
+                    console.log('回调结果:', callbackPayload);
+                    showSuccessPage(callbackPayload);
+                }
+            } catch (error) {
+                console.error('回调失败:', error);
+                showToast('提交结果失败: ' + error.message, 'error');
+            }
+
+            setStatus('已提交', 'ready');
+        }
+
+        // ============================================================
+        //                      显示成功页面
+        // ============================================================
+        function showSuccessPage(payload) {
+            document.body.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;height:100vh;background:linear-gradient(135deg,#667eea,#764ba2);">
+                    <div style="background:white;padding:48px;border-radius:16px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-width:600px;">
+                        <div style="font-size:56px;margin-bottom:16px;">✅</div>
+                        <h2 style="margin-bottom:8px;color:#333;">编辑完成</h2>
+                        <p style="color:#666;margin-bottom:20px;">工具: ${payload.tool}</p>
+                        <div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:12px;text-align:left;">
+                            <p style="font-size:12px;color:#666;">结果图片URL:</p>
+                            <p style="font-size:11px;color:#007bff;word-break:break-all;">${payload.final_image_url}</p>
+                        </div>
+                        <div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:12px;text-align:left;">
+                            <p style="font-size:12px;color:#666;">原始图片URL:</p>
+                            <p style="font-size:11px;color:#666;word-break:break-all;">${payload.original_image_url}</p>
+                        </div>
+                        <p style="color:#666;font-size:14px;margin-top:16px;">Dify工作流已自动继续，请返回查看结果</p>
+                    </div>
+                </div>`;
+        }
+
+        // ============================================================
+        //                      主动获取结果（供外部调用）
+        // ============================================================
+        function requestEditorResult() {
+            const iframe = document.getElementById('editorIframe');
+            iframe.contentWindow.postMessage({ action: 'requestResult' }, '*');
+        }
+
+        // ============================================================
+        //                      启动
+        // ============================================================
+        if (CONFIG.imageUrl) {
+            initEditor();
+        } else {
+            document.getElementById('loadingOverlay').innerHTML = `
+                <div style="text-align:center;color:#666;">
+                    <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+                    <p>缺少图片URL参数 (image_url)</p>
+                    <p style="font-size:12px;margin-top:8px;">请检查URL参数是否正确</p>
+                </div>`;
+            setStatus('参数缺失', '');
+        }
+    </script>
+</body>
+</html>
