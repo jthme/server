@@ -109,24 +109,8 @@
 
     <div class="toast" id="toast"></div>
 
-    <!-- ========== AIDGE 通信SDK ========== -->
+    <!-- ========== 配置参数（在SDK加载前声明） ========== -->
     <script>
-        // 必须在SDK脚本之前声明
-        window.INTL_OP_FRAME_SDK_CONFIG = {
-            apiMap: {
-                // 将SDK默认的签名请求路径映射到实际的服务端地址
-                '/open/api/signature': '__SIGNATURE_ENDPOINT__'
-            },
-            // 请求数据格式
-            dataType: 'json'
-        };
-    </script>
-    <script src="https://g.alicdn.com/code/npm/@ali/intl-op-frame-sdk/0.1.10/main.min.js"></script>
-
-    <script>
-        // ============================================================
-        //                      配置参数
-        // ============================================================
         const urlParams = new URLSearchParams(window.location.search);
 
         const CONFIG = {
@@ -138,22 +122,33 @@
             // 编辑器配置
             editorBaseUrl: 'https://image-editor.aidc-ai.com/editor/index.html/?version=v2#/',
             editorTool: 'elimination',
-            apiHost: 'aibcn',       // 'aibcn'=中文站, 'aib'=英文站
-            trial: urlParams.get('trial') !== 'false',   // 默认试用
+            apiHost: 'aibcn',
+            trial: urlParams.get('trial') !== 'false',
             lang: urlParams.get('lang') || 'zh-cn',
 
             // 能力输入参数（消除编辑器）
             imageUrl: urlParams.get('image_url') || '',
-            imageWidth: parseInt(urlParams.get('image_width') || '800'),
-            imageHeight: parseInt(urlParams.get('image_height') || '800'),
 
-            // 加签服务地址（由Nginx代理或直连）
-            signatureEndpoint: urlParams.get('signature_endpoint') || '/open/api/signature'
+            // 加签服务地址
+            signatureEndpoint: urlParams.get('signature_endpoint') || '/open/api/signature',
+
+            // 高级功能
+            charge: false,   // 生产拦截（需配合后端余额校验）
+            reEdit: true    // 再次编辑（需传入 schema）
         };
 
-        // 更新SDK配置中的签名端点
-        window.INTL_OP_FRAME_SDK_CONFIG.apiMap['/open/api/signature'] = CONFIG.signatureEndpoint;
+        // SDK配置 — 必须在SDK脚本加载前正确设置
+        window.INTL_OP_FRAME_SDK_CONFIG = {
+            apiMap: {
+                '/open/api/signature': CONFIG.signatureEndpoint
+            },
+            dataType: 'json'
+        };
+    </script>
+    <!-- ========== AIDGE 通信SDK ========== -->
+    <script src="https://g.alicdn.com/code/npm/@ali/intl-op-frame-sdk/0.1.10/main.min.js"></script>
 
+    <script>
         // 结果存储
         let editorResults = [];
         let isEditorReady = false;
@@ -175,16 +170,16 @@
         }
 
         // ============================================================
-        //                      构建编辑器URL
+        //                      构建编辑器URL（对齐官方文档拼接规范）
         // ============================================================
         function buildEditorUrl() {
             const payload = {
                 apiHost: CONFIG.apiHost,
                 trial: CONFIG.trial,
-                width: CONFIG.imageWidth,
-                height: CONFIG.imageHeight,
+                lang: CONFIG.lang,
                 imageUrl: CONFIG.imageUrl,
-                lang: CONFIG.lang
+                charge: CONFIG.charge,
+                reEdit: CONFIG.reEdit
             };
             const payloadString = encodeURIComponent(JSON.stringify(payload));
             return `${CONFIG.editorBaseUrl}${CONFIG.editorTool}?payload=${payloadString}`;
@@ -221,10 +216,9 @@
                     break;
 
                 case 'generate':
-                    // 生产拦截（如果开启了 charge=true）
+                    // 生产拦截（charge=true 时生效）
                     console.log('用户触发生成，图片数量:', data?.imageNum);
-                    // 此处可以加入余额校验等逻辑
-                    // 允许继续
+                    // 允许继续生成（可在此处加入余额校验逻辑）
                     iframe.contentWindow.postMessage({
                         biz: biz || 'nhci-elimination',
                         action: 'respond',
@@ -274,21 +268,15 @@
                     session_id: CONFIG.sessionId,
                     workflow_run_id: CONFIG.workflowRunId,
                     action: 'editor_submit',
-                    // 画布结果图URL
                     final_image_url: currentResult.url || '',
-                    // 原始处理图URL
                     original_image_url: currentResult.originalUrl || '',
-                    // JSON协议（用于二次编辑）
                     schema: currentResult.schema || '',
-                    // 使用的工具
                     tool: currentResult.tool || 'elimination',
-                    // 结果ID
                     result_id: currentResult.id || '',
-                    // 完整结果数组
                     all_results: results
                 };
 
-                // 回调Dify工作流
+                // 回调Dify工作流（Webhook触发器）
                 if (CONFIG.difyWebhookUrl) {
                     const response = await fetch(CONFIG.difyWebhookUrl, {
                         method: 'POST',
@@ -303,7 +291,6 @@
                         showToast('回调Dify失败', 'error');
                     }
                 } else {
-                    // 没有webhook，直接显示结果
                     console.log('回调结果:', callbackPayload);
                     showSuccessPage(callbackPayload);
                 }
@@ -329,17 +316,13 @@
                             <p style="font-size:12px;color:#666;">结果图片URL:</p>
                             <p style="font-size:11px;color:#007bff;word-break:break-all;">${payload.final_image_url}</p>
                         </div>
-                        <div style="background:#f8f9fa;padding:16px;border-radius:8px;margin-bottom:12px;text-align:left;">
-                            <p style="font-size:12px;color:#666;">原始图片URL:</p>
-                            <p style="font-size:11px;color:#666;word-break:break-all;">${payload.original_image_url}</p>
-                        </div>
                         <p style="color:#666;font-size:14px;margin-top:16px;">Dify工作流已自动继续，请返回查看结果</p>
                     </div>
                 </div>`;
         }
 
         // ============================================================
-        //                      主动获取结果（供外部调用）
+        //                      主动获取结果
         // ============================================================
         function requestEditorResult() {
             const iframe = document.getElementById('editorIframe');
