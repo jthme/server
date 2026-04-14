@@ -119,6 +119,11 @@
             sessionId: urlParams.get('session_id') || '',
             workflowRunId: urlParams.get('workflow_run_id') || '',
 
+            // Dify API配置（用于恢复人工介入节点）
+            difyApiBase: urlParams.get('dify_api_base') || 'https://dify.swworker.com',
+            difyApiKey: urlParams.get('dify_api_key') || '',
+            humanInputVar: urlParams.get('human_input_var') || 'image_url',
+
             // 编辑器配置
             editorBaseUrl: 'https://image-editor.aidc-ai.com/editor/index.html/?version=v2#/',
             editorTool: 'elimination',
@@ -133,8 +138,8 @@
             signatureEndpoint: urlParams.get('signature_endpoint') || '/open/api/signature',
 
             // 高级功能
-            charge: false,   // 生产拦截（需配合后端余额校验）
-            reEdit: true    // 再次编辑（需传入 schema）
+            charge: false,
+            reEdit: true
         };
 
         // SDK配置 — 必须在SDK脚本加载前正确设置
@@ -258,48 +263,74 @@
                 return;
             }
 
-            setStatus('提交结果...', 'loading');
+            setStatus('提交结果并恢复工作流...', 'loading');
 
             try {
                 // 提取当前选中的结果（isCurrentIndex=true）
                 const currentResult = results.find(r => r.isCurrentIndex) || results[0];
 
-                const callbackPayload = {
-                    session_id: CONFIG.sessionId,
-                    workflow_run_id: CONFIG.workflowRunId,
-                    action: 'editor_submit',
-                    final_image_url: currentResult.url || '',
-                    original_image_url: currentResult.originalUrl || '',
-                    schema: currentResult.schema || '',
-                    tool: currentResult.tool || 'elimination',
-                    result_id: currentResult.id || '',
-                    all_results: results
-                };
+                // 1. 调用 Dify 恢复人工介入节点 API
+                if (CONFIG.workflowRunId && CONFIG.difyApiKey) {
+                    const resumeUrl = `${CONFIG.difyApiBase}/v1/workflows/run/${CONFIG.workflowRunId}/resume`;
+                    const resumeRes = await fetch(resumeUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${CONFIG.difyApiKey}`
+                        },
+                        body: JSON.stringify({
+                            result: 'accept',
+                            inputs: {
+                                [CONFIG.humanInputVar]: currentResult.url
+                            }
+                        })
+                    });
 
-                // 回调Dify工作流（Webhook触发器）
+                    if (resumeRes.ok) {
+                        showToast('已恢复Dify工作流执行', 'success');
+                    } else {
+                        const err = await resumeRes.json();
+                        showToast(`恢复工作流失败: ${err.message || '未知错误'}`, 'error');
+                        console.error('Dify Resume Error:', err);
+                    }
+                } else {
+                    console.log('未配置 workflow_run_id 或 api_key，跳过恢复工作流');
+                }
+
+                // 2. 回调 Webhook（备用/并行机制）
                 if (CONFIG.difyWebhookUrl) {
-                    const response = await fetch(CONFIG.difyWebhookUrl, {
+                    const callbackPayload = {
+                        session_id: CONFIG.sessionId,
+                        workflow_run_id: CONFIG.workflowRunId,
+                        action: 'editor_submit',
+                        final_image_url: currentResult.url || '',
+                        original_image_url: currentResult.originalUrl || '',
+                        schema: currentResult.schema || '',
+                        tool: currentResult.tool || 'elimination',
+                        result_id: currentResult.id || '',
+                        all_results: results
+                    };
+
+                    await fetch(CONFIG.difyWebhookUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(callbackPayload)
                     });
-
-                    if (response.ok) {
-                        showToast('结果已提交到Dify工作流', 'success');
-                        showSuccessPage(callbackPayload);
-                    } else {
-                        showToast('回调Dify失败', 'error');
-                    }
-                } else {
-                    console.log('回调结果:', callbackPayload);
-                    showSuccessPage(callbackPayload);
                 }
+
+                // 3. 显示成功页
+                showSuccessPage({
+                    tool: currentResult.tool,
+                    final_image_url: currentResult.url,
+                    original_image_url: currentResult.originalUrl
+                });
+
             } catch (error) {
                 console.error('回调失败:', error);
                 showToast('提交结果失败: ' + error.message, 'error');
             }
 
-            setStatus('已提交', 'ready');
+            setStatus('已提交，工作流恢复中', 'ready');
         }
 
         // ============================================================
@@ -316,7 +347,9 @@
                             <p style="font-size:12px;color:#666;">结果图片URL:</p>
                             <p style="font-size:11px;color:#007bff;word-break:break-all;">${payload.final_image_url}</p>
                         </div>
-                        <p style="color:#666;font-size:14px;margin-top:16px;">Dify工作流已自动继续，请返回查看结果</p>
+                        <p style="color:#28a745;font-size:16px;margin-top:16px;font-weight:bold;">
+                            ✅ Dify工作流已自动恢复执行，请返回查看结果
+                        </p>
                     </div>
                 </div>`;
         }
