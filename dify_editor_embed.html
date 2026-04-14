@@ -175,6 +175,20 @@
         // 结果存储
         let editorResults = [];
         let isEditorReady = false;
+        // 用于等待 submitAll 结果的 Promise 解析器
+        let resultResolver = null;
+        let resultTimeout = null;
+
+        // 带超时的等待结果函数
+        function waitForEditorResult(timeoutMs = 5000) {
+            return new Promise((resolve, reject) => {
+                resultResolver = resolve;
+                resultTimeout = setTimeout(() => {
+                    resultResolver = null;
+                    reject(new Error('等待编辑器结果超时'));
+                }, timeoutMs);
+            });
+        }
 
         // ============================================================
         //                      工具函数
@@ -228,17 +242,20 @@
         document.getElementById('btnSubmit').addEventListener('click', async function() {
             const btn = this;
 
-            // 如果还没有缓存的结果，先主动请求编辑器返回当前结果
+            // 如果还没有缓存的结果，向 iframe 请求当前结果
             if (!editorResults || editorResults.length === 0) {
                 showToast('正在获取编辑结果...', 'loading');
-                requestEditorResult();
-                // 等待一小段时间让 postMessage 返回结果
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
+                const waitPromise = waitForEditorResult(8000);
+                // 向 iframe 请求结果
+                const iframe = document.getElementById('editorIframe');
+                iframe.contentWindow.postMessage({ action: 'requestResult' }, '*');
 
-            if (!editorResults || editorResults.length === 0) {
-                showToast('未获取到编辑结果，请先在编辑器中完成编辑', 'error');
-                return;
+                try {
+                    editorResults = await waitPromise;
+                } catch (e) {
+                    showToast('未获取到编辑结果：请先在编辑器内完成编辑并点击"下载"', 'error');
+                    return;
+                }
             }
 
             const currentResult = editorResults.find(r => r.isCurrentIndex) || editorResults[0];
@@ -323,10 +340,18 @@
                     break;
 
                 case 'submitAll':
-                    // 用户点击编辑器内部的"保存/下载" — 仅缓存结果，不触发回调
-                    console.log('编辑器内部提交结果:', data);
+                    // 编辑器返回结果（用户点击内部下载 / 被请求返回结果）
+                    console.log('编辑器返回结果:', JSON.stringify(data));
                     editorResults = data;
-                    showToast('结果已缓存，请点击右上角"确认并提交"', 'success');
+                    // 如果有等待的 Promise，resolve 它
+                    if (resultResolver) {
+                        clearTimeout(resultTimeout);
+                        resultResolver(data);
+                        resultResolver = null;
+                        resultTimeout = null;
+                    } else {
+                        showToast('结果已缓存，请点击右上角"确认并提交"', 'success');
+                    }
                     break;
 
                 case 'error':
@@ -358,14 +383,6 @@
                         </p>
                     </div>
                 </div>`;
-        }
-
-        // ============================================================
-        //                      主动获取结果
-        // ============================================================
-        function requestEditorResult() {
-            const iframe = document.getElementById('editorIframe');
-            iframe.contentWindow.postMessage({ action: 'requestResult' }, '*');
         }
 
         // ============================================================
