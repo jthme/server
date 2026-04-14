@@ -312,11 +312,24 @@
 
                 case 'taskSuccess':
                     // 生成任务完成 — 自动缓存结果URL
-                    console.log('生成任务完成:', JSON.stringify(data));
+                    console.log('taskSuccess 原始数据:', JSON.stringify(data));
 
-                    // 从 taskSuccess 的 data 中提取图片URL并缓存
-                    // data 结构可能包含 url / imageUrl 等字段
-                    const imageUrl = data?.url || data?.imageUrl || data?.resultUrl || '';
+                    // 从 data 中提取图片URL — 兼容多种字段名
+                    const imageUrl = data?.url
+                        || data?.imageUrl
+                        || data?.resultUrl
+                        || data?.image_url
+                        || data?.downloadUrl
+                        || data?.download_url
+                        || data?.finalUrl
+                        || data?.final_url
+                        || data?.src
+                        || data?.imageSrc
+                        // 嵌套结构：data.images[0].url
+                        || (data?.images && Array.isArray(data.images) && data.images.length > 0 && (data.images[0].url || data.images[0].imageUrl || data.images[0]))
+                        // 嵌套结构：data.data.url
+                        || (data?.data && (data.data.url || data.data.imageUrl || data.data.image_url))
+                        || '';
                     if (imageUrl) {
                         editorResults = [{
                             id: data?.id || 'task_' + Date.now(),
@@ -324,12 +337,12 @@
                             originalUrl: CONFIG.imageUrl,
                             isCurrentIndex: true,
                             tool: CONFIG.editorTool || 'elimination',
-                            schema: data?.schema || '',
+                            schema: data?.schema || data?.resultSchema || '',
                             timestamp: Date.now()
                         }];
                         showToast('图片已生成，结果已缓存', 'success');
                     } else {
-                        console.warn('taskSuccess 数据中未找到图片URL字段:', data);
+                        console.warn('taskSuccess 数据中未找到图片URL字段，完整数据:', JSON.stringify(data));
                         showToast('图片生成完成，但未获取到图片URL', 'error');
                     }
                     break;
