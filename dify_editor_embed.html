@@ -108,7 +108,7 @@
         <h1>AIDGE 智能消除编辑器</h1>
         <div class="header-actions">
             <span class="info" id="headerInfo">加载中...</span>
-            <button class="btn-submit" id="btnSubmit" style="display:none;">确认并提交</button>
+            <button class="btn-submit" id="btnSubmit">确认并提交</button>
         </div>
     </div>
     <div class="status-bar">
@@ -305,7 +305,6 @@
                     setStatus('编辑器就绪', 'ready');
                     isEditorReady = true;
                     document.getElementById('loadingOverlay').style.display = 'none';
-                    document.getElementById('btnSubmit').style.display = 'inline-block';
                     showToast('编辑器加载完成，编辑后点击"确认并提交"', 'success');
                     break;
 
