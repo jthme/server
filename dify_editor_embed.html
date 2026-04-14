@@ -108,7 +108,7 @@
         <h1>AIDGE 智能消除编辑器</h1>
         <div class="header-actions">
             <span class="info" id="headerInfo">加载中...</span>
-            <button class="btn-submit" id="btnSubmit">确认并提交</button>
+            <button class="btn-submit" id="btnSubmit" disabled>确认并提交</button>
         </div>
     </div>
     <div class="status-bar">
@@ -118,7 +118,7 @@
     <div class="iframe-container">
         <div class="loading-overlay" id="loadingOverlay">
             <div class="spinner"></div>
-            <p>正在加载编辑器...</p>
+            <p>正在启动工作流...</p>
         </div>
         <iframe id="editorIframe" class="aidc-open-frame" src="" frameborder="0"></iframe>
     </div>
@@ -130,11 +130,6 @@
         const urlParams = new URLSearchParams(window.location.search);
 
         const CONFIG = {
-            // Dify工作流参数
-            sessionId: urlParams.get('session_id') || '',
-            workflowRunId: urlParams.get('workflow_run_id') || '',
-            formToken: urlParams.get('form_token') || '',
-
             // Dify API配置
             difyApiBase: urlParams.get('dify_api_base') || 'https://dify.swworker.com',
             humanInputVar: urlParams.get('human_input_var') || 'image_url',
@@ -159,6 +154,10 @@
             charge: false,
             reEdit: true
         };
+
+        // 运行时变量（由 start_workflow 返回）
+        let sessionId = '';
+        let fromToken = '';
 
         // SDK配置 — 必须在SDK脚本加载前正确设置
         window.INTL_OP_FRAME_SDK_CONFIG = {
@@ -209,6 +208,43 @@
         }
 
         // ============================================================
+        //                      启动工作流并获取 from_token
+        // ============================================================
+        async function startWorkflow() {
+            setStatus('正在触发Dify工作流...', 'loading');
+            document.querySelector('#loadingOverlay p').textContent = '正在启动工作流，等待人工节点...';
+
+            try {
+                const res = await fetch(`${CONFIG.backendBase}/open/api/start_workflow`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_url: CONFIG.imageUrl })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    sessionId = data.session_id;
+                    fromToken = data.from_token;
+                    document.getElementById('headerInfo').textContent = `Session: ${sessionId.substring(0, 8)}...`;
+                    setStatus('工作流已暂停在人工节点，加载编辑器', 'ready');
+                    return true;
+                } else {
+                    showToast(`启动工作流失败: ${data.message || '未知错误'}`, 'error');
+                    setStatus('启动工作流失败', '');
+                    document.querySelector('#loadingOverlay p').textContent = `启动失败: ${data.message || '未知错误'}`;
+                    return false;
+                }
+            } catch (error) {
+                console.error('启动工作流失败:', error);
+                showToast('网络请求失败: ' + error.message, 'error');
+                setStatus('启动工作流失败', '');
+                document.querySelector('#loadingOverlay p').textContent = `网络错误: ${error.message}`;
+                return false;
+            }
+        }
+
+        // ============================================================
         //                      初始化编辑器
         // ============================================================
         function initEditor() {
@@ -216,10 +252,8 @@
             const editorUrl = buildEditorUrl();
             iframe.src = editorUrl;
 
-            document.getElementById('headerInfo').textContent =
-                `Session: ${CONFIG.sessionId.substring(0, 8)}...`;
-
             setStatus('加载编辑器', 'loading');
+            document.querySelector('#loadingOverlay p').textContent = '正在加载编辑器...';
         }
 
         // ============================================================
@@ -252,11 +286,10 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        workflow_run_id: CONFIG.workflowRunId,
-                        form_token: CONFIG.formToken,
+                        session_id: sessionId,
+                        from_token: fromToken,
                         final_image_url: finalImageUrl,
-                        human_input_var: CONFIG.humanInputVar,
-                        session_id: CONFIG.sessionId
+                        human_input_var: CONFIG.humanInputVar
                     })
                 });
 
@@ -298,6 +331,7 @@
                     setStatus('编辑器就绪', 'ready');
                     isEditorReady = true;
                     document.getElementById('loadingOverlay').style.display = 'none';
+                    document.getElementById('btnSubmit').disabled = false;
                     showToast('编辑器加载完成，编辑后点击"确认并提交"', 'success');
                     break;
 
@@ -393,19 +427,27 @@
         }
 
         // ============================================================
-        //                      启动
+        //                      启动流程
         // ============================================================
-        if (CONFIG.imageUrl) {
+        (async function() {
+            if (!CONFIG.imageUrl) {
+                document.getElementById('loadingOverlay').innerHTML = `
+                    <div style="text-align:center;color:#666;">
+                        <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+                        <p>缺少图片URL参数 (image_url)</p>
+                        <p style="font-size:12px;margin-top:8px;">请检查URL参数是否正确</p>
+                    </div>`;
+                setStatus('参数缺失', '');
+                return;
+            }
+
+            // Step 1: 触发工作流，获取 from_token
+            const started = await startWorkflow();
+            if (!started) return;
+
+            // Step 2: 加载编辑器
             initEditor();
-        } else {
-            document.getElementById('loadingOverlay').innerHTML = `
-                <div style="text-align:center;color:#666;">
-                    <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
-                    <p>缺少图片URL参数 (image_url)</p>
-                    <p style="font-size:12px;margin-top:8px;">请检查URL参数是否正确</p>
-                </div>`;
-            setStatus('参数缺失', '');
-        }
+        })();
     </script>
 </body>
 </html>
