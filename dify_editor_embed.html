@@ -314,35 +314,42 @@
                     // 生成任务完成 — 自动缓存结果URL
                     console.log('taskSuccess 原始数据:', JSON.stringify(data));
 
-                    // 从 data 中提取图片URL — 兼容多种字段名
-                    const imageUrl = data?.url
-                        || data?.imageUrl
-                        || data?.resultUrl
-                        || data?.image_url
-                        || data?.downloadUrl
-                        || data?.download_url
-                        || data?.finalUrl
-                        || data?.final_url
-                        || data?.src
-                        || data?.imageSrc
-                        // 嵌套结构：data.images[0].url
-                        || (data?.images && Array.isArray(data.images) && data.images.length > 0 && (data.images[0].url || data.images[0].imageUrl || data.images[0]))
-                        // 嵌套结构：data.data.url
-                        || (data?.data && (data.data.url || data.data.imageUrl || data.data.image_url))
-                        || '';
+                    let imageUrl = '';
+                    let imageId = '';
+
+                    // data 是数组：[{ id, url }, ...]
+                    if (Array.isArray(data) && data.length > 0) {
+                        const first = data[0];
+                        imageUrl = first.url || first.imageUrl || first.image_url || first;
+                        imageId = first.id || '';
+                    }
+                    // data 是对象
+                    else if (typeof data === 'object' && data !== null) {
+                        imageUrl = data?.url
+                            || data?.imageUrl
+                            || data?.image_url
+                            || data?.downloadUrl
+                            || data?.download_url
+                            || data?.src
+                            || data?.imageSrc
+                            || (data?.data && (data.data.url || data.data.imageUrl))
+                            || '';
+                        imageId = data?.id || '';
+                    }
+
                     if (imageUrl) {
                         editorResults = [{
-                            id: data?.id || 'task_' + Date.now(),
+                            id: imageId || 'task_' + Date.now(),
                             url: imageUrl,
                             originalUrl: CONFIG.imageUrl,
                             isCurrentIndex: true,
                             tool: CONFIG.editorTool || 'elimination',
-                            schema: data?.schema || data?.resultSchema || '',
+                            schema: data?.schema || '',
                             timestamp: Date.now()
                         }];
                         showToast('图片已生成，结果已缓存', 'success');
                     } else {
-                        console.warn('taskSuccess 数据中未找到图片URL字段，完整数据:', JSON.stringify(data));
+                        console.warn('未找到图片URL，完整数据:', JSON.stringify(data));
                         showToast('图片生成完成，但未获取到图片URL', 'error');
                     }
                     break;
