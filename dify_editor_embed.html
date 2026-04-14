@@ -119,11 +119,9 @@
             sessionId: urlParams.get('session_id') || '',
             workflowRunId: urlParams.get('workflow_run_id') || '',
 
-            // Dify API配置（用于恢复人工介入节点）
+            // Dify API配置
             difyApiBase: urlParams.get('dify_api_base') || 'https://dify.swworker.com',
-            difyApiKey: urlParams.get('dify_api_key') || '',
             humanInputVar: urlParams.get('human_input_var') || 'image_url',
-            formToken: urlParams.get('form_token') || '',
 
             // 编辑器配置
             editorBaseUrl: 'https://image-editor.aidc-ai.com/editor/index.html/?version=v2#/',
@@ -270,32 +268,7 @@
                 // 提取当前选中的结果（isCurrentIndex=true）
                 const currentResult = results.find(r => r.isCurrentIndex) || results[0];
 
-                // 1. 调用 Dify 恢复人工介入节点 API
-                if (CONFIG.formToken) {
-                    const resumeUrl = `${CONFIG.difyApiBase}/api/form/human_input/${CONFIG.formToken}`;
-                    const resumeRes = await fetch(resumeUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            action: 'approved',
-                            inputs: {
-                                [CONFIG.humanInputVar]: currentResult.url
-                            }
-                        })
-                    });
-
-                    if (resumeRes.ok) {
-                        showToast('已恢复Dify工作流执行', 'success');
-                    } else {
-                        const err = await resumeRes.json();
-                        showToast(`恢复工作流失败: ${err.message || '未知错误'}`, 'error');
-                        console.error('Dify Resume Error:', err);
-                    }
-                } else {
-                    console.log('未配置 form_token，跳过恢复工作流');
-                }
-
-                // 2. 回调 Webhook（备用/并行机制）
+                // 回调 Webhook（由服务端接收后调用 Dify API 恢复工作流）
                 if (CONFIG.difyWebhookUrl) {
                     const callbackPayload = {
                         session_id: CONFIG.sessionId,
@@ -306,17 +279,33 @@
                         schema: currentResult.schema || '',
                         tool: currentResult.tool || 'elimination',
                         result_id: currentResult.id || '',
+                        human_input_var: CONFIG.humanInputVar,
                         all_results: results
                     };
 
-                    await fetch(CONFIG.difyWebhookUrl, {
+                    const res = await fetch(CONFIG.difyWebhookUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(callbackPayload)
                     });
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.dify_resume_ok) {
+                            showToast('已恢复Dify工作流执行', 'success');
+                        } else {
+                            showToast('结果已提交，但未找到对应的工作流表单', 'error');
+                        }
+                    } else {
+                        const err = await res.json();
+                        showToast(`提交结果失败: ${err.message || '未知错误'}`, 'error');
+                        console.error('Callback Error:', err);
+                    }
+                } else {
+                    console.log('未配置回调地址，跳过恢复工作流');
                 }
 
-                // 3. 显示成功页
+                // 显示成功页
                 showSuccessPage({
                     tool: currentResult.tool,
                     final_image_url: currentResult.url,
