@@ -123,6 +123,7 @@
             difyApiBase: urlParams.get('dify_api_base') || 'https://dify.swworker.com',
             difyApiKey: urlParams.get('dify_api_key') || '',
             humanInputVar: urlParams.get('human_input_var') || 'image_url',
+            formToken: urlParams.get('form_token') || '',
 
             // 编辑器配置
             editorBaseUrl: 'https://image-editor.aidc-ai.com/editor/index.html/?version=v2#/',
@@ -270,16 +271,13 @@
                 const currentResult = results.find(r => r.isCurrentIndex) || results[0];
 
                 // 1. 调用 Dify 恢复人工介入节点 API
-                if (CONFIG.workflowRunId && CONFIG.difyApiKey) {
-                    const resumeUrl = `${CONFIG.difyApiBase}/v1/workflows/run/${CONFIG.workflowRunId}/resume`;
+                if (CONFIG.formToken) {
+                    const resumeUrl = `${CONFIG.difyApiBase}/api/form/human_input/${CONFIG.formToken}`;
                     const resumeRes = await fetch(resumeUrl, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${CONFIG.difyApiKey}`
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            result: 'accept',
+                            action: 'approved',
                             inputs: {
                                 [CONFIG.humanInputVar]: currentResult.url
                             }
@@ -294,7 +292,7 @@
                         console.error('Dify Resume Error:', err);
                     }
                 } else {
-                    console.log('未配置 workflow_run_id 或 api_key，跳过恢复工作流');
+                    console.log('未配置 form_token，跳过恢复工作流');
                 }
 
                 // 2. 回调 Webhook（备用/并行机制）
