@@ -175,20 +175,6 @@
         // 结果存储
         let editorResults = [];
         let isEditorReady = false;
-        // 用于等待 submitAll 结果的 Promise 解析器
-        let resultResolver = null;
-        let resultTimeout = null;
-
-        // 带超时的等待结果函数
-        function waitForEditorResult(timeoutMs = 5000) {
-            return new Promise((resolve, reject) => {
-                resultResolver = resolve;
-                resultTimeout = setTimeout(() => {
-                    resultResolver = null;
-                    reject(new Error('等待编辑器结果超时'));
-                }, timeoutMs);
-            });
-        }
 
         // ============================================================
         //                      工具函数
@@ -242,20 +228,10 @@
         document.getElementById('btnSubmit').addEventListener('click', async function() {
             const btn = this;
 
-            // 如果还没有缓存的结果，向 iframe 请求当前结果
+            // 使用缓存的编辑结果（由 taskSuccess 事件自动缓存）
             if (!editorResults || editorResults.length === 0) {
-                showToast('正在获取编辑结果...', 'loading');
-                const waitPromise = waitForEditorResult(8000);
-                // 向 iframe 请求结果
-                const iframe = document.getElementById('editorIframe');
-                iframe.contentWindow.postMessage({ action: 'requestResult' }, '*');
-
-                try {
-                    editorResults = await waitPromise;
-                } catch (e) {
-                    showToast('未获取到编辑结果：请先在编辑器内完成编辑并点击"下载"', 'error');
-                    return;
-                }
+                showToast('未获取到编辑结果：请先在编辑器内点击"立即生成"', 'error');
+                return;
             }
 
             const currentResult = editorResults.find(r => r.isCurrentIndex) || editorResults[0];
@@ -335,23 +311,34 @@
                     break;
 
                 case 'taskSuccess':
-                    console.log('业务:', biz, '生成任务完成:', data);
-                    showToast('图片生成完成', 'success');
+                    // 生成任务完成 — 自动缓存结果URL
+                    console.log('生成任务完成:', JSON.stringify(data));
+
+                    // 从 taskSuccess 的 data 中提取图片URL并缓存
+                    // data 结构可能包含 url / imageUrl 等字段
+                    const imageUrl = data?.url || data?.imageUrl || data?.resultUrl || '';
+                    if (imageUrl) {
+                        editorResults = [{
+                            id: data?.id || 'task_' + Date.now(),
+                            url: imageUrl,
+                            originalUrl: CONFIG.imageUrl,
+                            isCurrentIndex: true,
+                            tool: CONFIG.editorTool || 'elimination',
+                            schema: data?.schema || '',
+                            timestamp: Date.now()
+                        }];
+                        showToast('图片已生成，结果已缓存', 'success');
+                    } else {
+                        console.warn('taskSuccess 数据中未找到图片URL字段:', data);
+                        showToast('图片生成完成，但未获取到图片URL', 'error');
+                    }
                     break;
 
                 case 'submitAll':
-                    // 编辑器返回结果（用户点击内部下载 / 被请求返回结果）
-                    console.log('编辑器返回结果:', JSON.stringify(data));
+                    // 编辑器内部"下载/保存"返回的完整结果
+                    console.log('编辑器返回完整结果:', JSON.stringify(data));
                     editorResults = data;
-                    // 如果有等待的 Promise，resolve 它
-                    if (resultResolver) {
-                        clearTimeout(resultTimeout);
-                        resultResolver(data);
-                        resultResolver = null;
-                        resultTimeout = null;
-                    } else {
-                        showToast('结果已缓存，请点击右上角"确认并提交"', 'success');
-                    }
+                    showToast('结果已缓存，请点击右上角"确认并提交"', 'success');
                     break;
 
                 case 'error':
